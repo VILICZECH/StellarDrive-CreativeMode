@@ -1,5 +1,5 @@
 # Creative mode
 
-Choose creative before creating a world. Creative starts with tools in the quick bar, unlocks research, does not spend materials, disables health and oxygen, and double-tap space toggles flight.
+Choose creative before creating a world. Creative starts with tools in the quick bar, unlocks research, does not spend materials, disables health and oxygen, and double-tap space toggles flight. Middle-click with the build tool selects the part you are looking at. Shift-click stacks hull blocks in a line, the scroll wheel sets the length up to 16, and the next click places the line. Ctrl+Z undoes the last placement and Ctrl+Y restores it. Wood thrusters, generators, and distillers can be refilled or set to infinite fuel.
 
 MelonLoader mod for Stellar Drive.
