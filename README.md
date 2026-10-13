@@ -1,5 +1,15 @@
 # Creative mode
 
-Choose creative before creating a world. Creative starts with tools in the quick bar, unlocks research, does not spend materials, disables health and oxygen, and double-tap space toggles flight. Middle-click with the build tool selects the part you are looking at. Shift-click stacks hull blocks in a line, the scroll wheel sets the length up to 16, and the next click places the line. Ctrl+Z undoes the last placement and Ctrl+Y restores it. Wood thrusters, generators, and distillers can be refilled or set to infinite fuel.
+Need creative mode? Build anything you can imagine without grinding for a single material.
+
+Pick Creative when you create a new world and you get:
+- Free building: no materials needed and all research unlocked
+- No health or oxygen to worry about
+- Fly freely: double-tap Space to toggle flight
+- Your tools ready in the quick bar
+- Middle-click with the build tool to pick the part you are looking at
+- Shift-click to stack hull blocks in a line, scroll to set the length (up to 16)
+- Ctrl+Z to undo and Ctrl+Y to redo placements
+- Refill wood thrusters, generators and distillers, or give them infinite fuel
 
 MelonLoader mod for Stellar Drive.
