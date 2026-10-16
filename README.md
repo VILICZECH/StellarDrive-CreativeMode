@@ -5,14 +5,21 @@
 Need creative mode? Build anything you can imagine without grinding for a single material.
 
 Pick Creative when you create a new world and you get:
-- Free building: no materials needed and all research unlocked
+- Free building: no materials needed, research and the journal unlocked, and parts from other mods in a Mods tab
 - No health or oxygen to worry about
-- Fly freely: double-tap Space to toggle flight. The scroll wheel sets the speed up to 128×, and Shift holds one step faster
-- Your tools ready in the quick bar
-- Middle-click with the build tool to pick the part you are looking at
-- Shift-click to stack hull blocks in a line, scroll to set the length (up to 16)
-- Ctrl+Z to undo and Ctrl+Y to redo placements
+- Tools ready in the quick bar
+- Middle-click picks the part you are looking at, even without the build tool
+- Shift-click stacks hull blocks in a line. Scroll sets the length up to 16, then click places it
+- Ctrl+Z undoes the last placement or cable, Ctrl+Y restores it
 - Refill wood thrusters, generators and distillers, or give them infinite fuel
+
+Flight, double-tap Space:
+- The mode you are in stays, walking or flying
+- Shift+scroll sets speed from ¼× to 128× walking speed. A short label shows the step
+- Hold Shift while moving to fly at double that speed
+- F uses whatever you look at: levers, chests, seats and other devices
+- When a device has taken WASD, Space, Ctrl and Shift, those keys run the device and movement pauses. In flight you stay aloft
+- Hold Left Alt to move again. The device stays open and takes the keys back when you let go
 
 MelonLoader mod for Stellar Drive.
 
@@ -41,7 +48,7 @@ The DLL ends up in `src/bin/Release`. Add `-p:CopyToMods=true` to copy it into t
 | `ModePicker.cs` | The Creative / Survival dialog before a new world is created |
 | `GameText.cs` | Localized strings taken from the game |
 | `CreativePatches.cs` | Tools, free build, health, oxygen, collision damage and the tutorial |
-| `CreativeFlight.cs` | Double-tap Space to fly, scroll to set the speed, and the patches that keep flying usable |
+| `CreativeFlight.cs` | Double-tap Space to fly, Shift+scroll for speed, and device controls that keep walk or fly |
 | `CreativeCatalog.cs` | Unlocks every part and feature and ignores build costs |
 | `CreativeResearch.cs` | Unlocks research |
 | `CreativeJournal.cs` | Marks journal entries as read |

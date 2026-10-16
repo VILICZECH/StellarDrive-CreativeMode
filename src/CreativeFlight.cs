@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using Core.Services;
+using FishNet.Connection;
 using HarmonyLib;
 using Managers.Interface.Model;
 using Managers.Interface.Services;
@@ -14,7 +16,6 @@ using Players.Physics;
 using Players.Physics.Model;
 using Players.Services;
 using TMPro;
-using Tools.Interface.Model;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -25,7 +26,7 @@ namespace CreativeMode
     static class CreativeFlight
     {
         const float DoubleTapSeconds = 0.3f;
-        const int SettleSteps = 90;
+        const int SettleSteps = 20;
         const float SettleJump = 6f;
         const float FlyReach = 4f;
         static readonly float[] GearScale = { 0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f, 32f, 64f, 128f };
@@ -38,11 +39,18 @@ namespace CreativeMode
         static TMP_Text _hint;
         static int _settle;
         static int _plugFrame = -1;
+        static readonly HashSet<int> FlewIntoUse = new HashSet<int>();
+        static bool _deviceOpen;
+        static bool _keepFlight;
+        static bool _pendingFly;
+        static uint _useShip;
+        static ushort _usePart;
         static bool _safe;
         static uint _safeSpace;
         static Vector3 _safePos;
         static float _savedReach = -1f;
         static bool _reachWidened;
+        static bool _heldKeys;
         static readonly Collider[] Hits = new Collider[16];
 
         public static void Tick()
@@ -58,11 +66,16 @@ namespace CreativeMode
             KeepInteractions();
             PaintSpeed();
             // A space typed into the chat or a name must not count as a tap.
+            if (_deviceOpen && !StellarDriveMods.Shared.GameKeys.Typing())
+                HoldDevice();
             if (!StellarDriveMods.Shared.GameKeys.Free())
             {
                 _lastTap = -1f;
+                _heldKeys = false;
                 return;
             }
+            if (!_deviceOpen)
+                DriveHeldKeys();
             Keyboard keyboard = Keyboard.current;
             UseLookedAt(keyboard);
             PlugSnappedCable();
@@ -113,12 +126,18 @@ namespace CreativeMode
             if (_settle <= 0)
                 return;
             _settle--;
-            state.Velocity = Vector3.zero;
             if (!_safe || state.SpaceId != _safeSpace)
                 return;
             Vector3 jump = state.Position - _safePos;
-            if (jump.sqrMagnitude > SettleJump * SettleJump || Blocked(state.Position))
-                state.Position = _safePos;
+            if (jump.sqrMagnitude <= SettleJump * SettleJump)
+                return;
+            state.Position = _safePos;
+            state.Velocity = Vector3.zero;
+        }
+
+        public static bool InsideGeometry(Vector3 position)
+        {
+            return Blocked(position);
         }
 
         public static bool Settling
@@ -168,21 +187,15 @@ namespace CreativeMode
 
         public static float SpeedScale()
         {
-            return GearScale[EffectiveGear()];
+            float scale = GearScale[_gear];
+            if (ShiftHeld())
+                scale *= 2f;
+            return scale;
         }
 
         public static bool TakeScroll()
         {
-            if (!StellarDriveMods.Shared.GameKeys.Free() || BuildLine.Locked)
-                return false;
-            if (ShiftHeld())
-                return true;
-            PlayerStateType state;
-            if (StellarDriveMods.Shared.GameKeys.TryGetState(out state)
-                && state == PlayerStateType.CheatFlyingHoldingShipPart)
-                return false;
-            LocalSelectedToolTracker tools = ServiceLocator.GetService<LocalSelectedToolTracker>();
-            return tools == null || !(tools.SelectedTool is IInteractableToolScroll);
+            return StellarDriveMods.Shared.GameKeys.Free() && !BuildLine.Locked && ShiftHeld();
         }
 
         public static void BumpScroll(InputAction.CallbackContext context)
@@ -200,18 +213,216 @@ namespace CreativeMode
             FlashSpeed();
         }
 
-        static int EffectiveGear()
+        static void DriveHeldKeys()
         {
-            int gear = _gear;
-            if (ShiftHeld())
-                gear = Mathf.Min(gear + 1, GearScale.Length - 1);
-            return gear;
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard == null)
+                return;
+            float x = 0f;
+            float y = 0f;
+            if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed)
+                x -= 1f;
+            if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed)
+                x += 1f;
+            if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed)
+                y -= 1f;
+            if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
+                y += 1f;
+            bool down = x * x + y * y > 0.01f;
+            if (!down && !_heldKeys)
+                return;
+            _heldKeys = down;
+            PlayerControlsActivator activator = Object.FindAnyObjectByType<PlayerControlsActivator>();
+            if (activator == null)
+                return;
+            if (FlyingNow())
+            {
+                PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>();
+                if (fly == null || !fly.isActiveAndEnabled)
+                    return;
+                fly.moveInput.x = x;
+                fly.moveInput.z = y;
+                return;
+            }
+            PlayerWalkingControls walking = activator.GetComponentInChildren<PlayerWalkingControls>();
+            if (walking == null || !walking.isActiveAndEnabled)
+                return;
+            walking.moveInput = new Vector2(x, y);
+        }
+
+        static void HoldDevice()
+        {
+            PlayerControlsActivator activator = Object.FindAnyObjectByType<PlayerControlsActivator>();
+            if (activator == null)
+                return;
+            bool alt = LeftAlt();
+            PlayerStateType type;
+            StellarDriveMods.Shared.GameKeys.TryGetState(out type);
+            PlayerLeverControl lever = activator.GetComponentInChildren<PlayerLeverControl>(true);
+            PlayerPilotingControls pilot = activator.GetComponentInChildren<PlayerPilotingControls>(true);
+            if (lever != null)
+            {
+                bool on = !alt && type == PlayerStateType.InteractingWithLever;
+                if (lever.enabled != on)
+                    lever.enabled = on;
+                if (alt)
+                    AccessTools.Field(typeof(PlayerLeverControl), "<PushInput>k__BackingField")?.SetValue(lever, 0f);
+            }
+            if (pilot != null)
+            {
+                bool on = !alt && type == PlayerStateType.Piloting;
+                if (pilot.enabled != on)
+                    pilot.enabled = on;
+                if (alt)
+                {
+                    AccessTools.Field(typeof(PlayerPilotingControls), "<MoveInput>k__BackingField")?.SetValue(pilot, Vector3.zero);
+                    AccessTools.Field(typeof(PlayerPilotingControls), "<RollInput>k__BackingField")?.SetValue(pilot, 0f);
+                }
+            }
+            if (!alt)
+            {
+                StopBody(activator);
+                return;
+            }
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard == null)
+                return;
+            float x = 0f;
+            float y = 0f;
+            if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed)
+                x -= 1f;
+            if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed)
+                x += 1f;
+            if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed)
+                y -= 1f;
+            if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
+                y += 1f;
+            PlayerWalkingControls walk = activator.GetComponentInChildren<PlayerWalkingControls>(true);
+            if (walk == null)
+                return;
+            walk.moveInput = new Vector2(x, y);
+            bool up = keyboard.spaceKey.isPressed;
+            bool down = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
+            walk.jumpInput = up ? 1f : 0f;
+            walk.crouchInput = down && !up ? 1f : 0f;
+            PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>(true);
+            if (fly == null)
+                return;
+            fly.moveInput.x = x;
+            fly.moveInput.z = y;
+            fly.moveInput.y = up ? 1f : (down ? -1f : 0f);
+        }
+
+        static void StopBody(PlayerControlsActivator activator)
+        {
+            PlayerWalkingControls walk = activator.GetComponentInChildren<PlayerWalkingControls>(true);
+            if (walk != null)
+            {
+                walk.moveInput = Vector2.zero;
+                walk.jumpInput = 0f;
+                walk.crouchInput = 0f;
+            }
+            PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>(true);
+            if (fly != null)
+                fly.moveInput = Vector3.zero;
+        }
+
+        static bool LeftAlt()
+        {
+            Keyboard keyboard = Keyboard.current;
+            return keyboard != null && keyboard.leftAltKey.isPressed;
         }
 
         static bool ShiftHeld()
         {
             Keyboard keyboard = Keyboard.current;
             return keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
+        }
+
+        public static void RememberUse(int clientId)
+        {
+            FlewIntoUse.Add(clientId);
+            _pendingFly = true;
+        }
+
+        public static bool WasFlying(int clientId)
+        {
+            return FlewIntoUse.Contains(clientId);
+        }
+
+        public static bool ForgetUse(int clientId)
+        {
+            if (!FlewIntoUse.Remove(clientId))
+                return false;
+            CloseDevice();
+            return true;
+        }
+
+        public static bool BridgingToDevice(PlayerStateType next)
+        {
+            return _pendingFly && next == PlayerStateType.Walking;
+        }
+
+        public static void OpenDevice(bool fromFly, PlayerState state)
+        {
+            _deviceOpen = true;
+            _keepFlight = fromFly || _pendingFly;
+            _pendingFly = false;
+            _useShip = state.EntityId;
+            _usePart = state.PartId;
+        }
+
+        public static void CloseDevice()
+        {
+            _deviceOpen = false;
+            _keepFlight = false;
+            _pendingFly = false;
+        }
+
+        public static bool IsDevice(PlayerStateType type)
+        {
+            return type == PlayerStateType.InteractingWithLever
+                || type == PlayerStateType.InteractingWithChest
+                || type == PlayerStateType.InteractingWithGenericPart
+                || type == PlayerStateType.Reading
+                || type == PlayerStateType.Writing
+                || type == PlayerStateType.Piloting;
+        }
+
+        public static bool IsMoveMode(PlayerStateType type)
+        {
+            return type == PlayerStateType.Walking
+                || type == PlayerStateType.WalkingHoldingCable
+                || type == PlayerStateType.WalkingHoldingShipPart
+                || type == PlayerStateType.CheatFlying
+                || type == PlayerStateType.CheatFlyingHoldingCable
+                || type == PlayerStateType.CheatFlyingHoldingShipPart;
+        }
+
+        public static bool IsFly(PlayerStateType type)
+        {
+            return type == PlayerStateType.CheatFlying
+                || type == PlayerStateType.CheatFlyingHoldingCable
+                || type == PlayerStateType.CheatFlyingHoldingShipPart;
+        }
+
+        public static void HoldFlight(PlayerState state)
+        {
+            OpenDevice(true, state);
+        }
+
+        public static bool KeepsFlight(PlayerState state)
+        {
+            if (!_deviceOpen || !_keepFlight || state.EntityId != _useShip || state.PartId != _usePart)
+                return false;
+            if (state.Type == PlayerStateType.Piloting)
+                return LeftAlt();
+            return IsDevice(state.Type);
+        }
+
+        public static bool AltDrives(PlayerState state)
+        {
+            return _deviceOpen && LeftAlt() && state.EntityId == _useShip && state.PartId == _usePart && IsDevice(state.Type);
         }
 
         static void FlashSpeed()
@@ -441,6 +652,8 @@ namespace CreativeMode
         {
             if (!CreativeSession.IsActive || !CreativeFlight.Settling)
                 return true;
+            if (!CreativeFlight.InsideGeometry(state.Position))
+                return true;
             state.Velocity = Vector3.zero;
             return false;
         }
@@ -458,14 +671,6 @@ namespace CreativeMode
         {
             bool flying = CreativeSession.IsActive && __instance.State.IsCheatFlying;
             SetCapsule(__instance, !flying);
-            if (!flying && CreativeFlight.Settling)
-            {
-                Rigidbody body = __instance.ServerRigidbody;
-                if (body == null)
-                    return;
-                body.linearVelocity = Vector3.zero;
-                body.angularVelocity = Vector3.zero;
-            }
         }
 
         static void SetCapsule(TrackedPlayerServer player, bool collisions)
@@ -599,6 +804,97 @@ namespace CreativeMode
         static bool Prefix(object worldObject)
         {
             return NoCreativeExitOrbit.LeaveAllowed(worldObject);
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___StartInteract_ServerRPC___2228377996")]
+    static class FlyCanUseParts
+    {
+        static void Prefix(object __instance, NetworkConnection __1)
+        {
+            TrackedPlayerServer player = FlyingUser(__instance, __1);
+            if (player == null || player.State.Type != PlayerStateType.CheatFlying)
+                return;
+            CreativeFlight.RememberUse(__1.ClientId);
+            player.SetState(new PlayerState { Type = PlayerStateType.Walking });
+        }
+
+        static void Postfix(object __instance, NetworkConnection __1)
+        {
+            if (__1 == null || !CreativeFlight.WasFlying(__1.ClientId))
+                return;
+            TrackedPlayerServer player = FlyingUser(__instance, __1);
+            if (player == null)
+                return;
+            if (player.State.Type == PlayerStateType.Walking)
+            {
+                CreativeFlight.ForgetUse(__1.ClientId);
+                player.SetState(new PlayerState { Type = PlayerStateType.CheatFlying });
+                return;
+            }
+            CreativeFlight.HoldFlight(player.State);
+        }
+
+        internal static TrackedPlayerServer FlyingUser(object service, NetworkConnection connection)
+        {
+            if (!CreativeSession.IsActive || service == null || connection == null)
+                return null;
+            object tracker = Traverse.Create(service).Field("_players").GetValue();
+            if (tracker == null)
+                return null;
+            return Traverse.Create(tracker).Method("GetTrackedPlayerFromConnectionId", connection.ClientId).GetValue<TrackedPlayerServer>();
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___StopInteract_ServerRPC___328543758")]
+    static class FlyAfterPartUse
+    {
+        static void Postfix(object __instance, NetworkConnection __0)
+        {
+            if (__0 == null || !CreativeFlight.ForgetUse(__0.ClientId))
+                return;
+            TrackedPlayerServer player = FlyCanUseParts.FlyingUser(__instance, __0);
+            if (player == null)
+                return;
+            player.SetState(new PlayerState { Type = PlayerStateType.CheatFlying });
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerState), "get_IsCheatFlying")]
+    static class StayFlyingWhileUsing
+    {
+        static void Postfix(ref PlayerState __instance, ref bool __result)
+        {
+            if (__result || !CreativeFlight.KeepsFlight(__instance))
+                return;
+            __result = true;
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerState), "get_IsUsingPhysics")]
+    static class AltMovesWhilePiloting
+    {
+        static void Postfix(ref PlayerState __instance, ref bool __result)
+        {
+            if (__result || !CreativeFlight.AltDrives(__instance))
+                return;
+            __result = true;
+        }
+    }
+
+    [HarmonyPatch(typeof(TrackedPlayerServer), "SetState")]
+    static class RememberDeviceMode
+    {
+        static void Prefix(TrackedPlayerServer __instance, PlayerState state)
+        {
+            if (!CreativeSession.IsActive || __instance == null)
+                return;
+            PlayerStateType oldType = __instance.State.Type;
+            PlayerStateType next = state.Type;
+            if (CreativeFlight.IsDevice(next))
+                CreativeFlight.OpenDevice(CreativeFlight.IsFly(oldType), state);
+            else if (CreativeFlight.IsMoveMode(next) && !CreativeFlight.BridgingToDevice(next))
+                CreativeFlight.CloseDevice();
         }
     }
 }
