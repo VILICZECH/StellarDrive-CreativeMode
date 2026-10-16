@@ -7,7 +7,7 @@ Need creative mode? Build anything you can imagine without grinding for a single
 Pick Creative when you create a new world and you get:
 - Free building: no materials needed and all research unlocked
 - No health or oxygen to worry about
-- Fly freely: double-tap Space to toggle flight
+- Fly freely: double-tap Space to toggle flight. The scroll wheel sets the speed up to 128×, and Shift holds one step faster
 - Your tools ready in the quick bar
 - Middle-click with the build tool to pick the part you are looking at
 - Shift-click to stack hull blocks in a line, scroll to set the length (up to 16)
@@ -41,7 +41,7 @@ The DLL ends up in `src/bin/Release`. Add `-p:CopyToMods=true` to copy it into t
 | `ModePicker.cs` | The Creative / Survival dialog before a new world is created |
 | `GameText.cs` | Localized strings taken from the game |
 | `CreativePatches.cs` | Tools, free build, health, oxygen, collision damage and the tutorial |
-| `CreativeFlight.cs` | Double-tap Space to fly, and the patches that keep flying usable |
+| `CreativeFlight.cs` | Double-tap Space to fly, scroll to set the speed, and the patches that keep flying usable |
 | `CreativeCatalog.cs` | Unlocks every part and feature and ignores build costs |
 | `CreativeResearch.cs` | Unlocks research |
 | `CreativeJournal.cs` | Marks journal entries as read |

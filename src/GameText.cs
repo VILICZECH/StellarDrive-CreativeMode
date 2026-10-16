@@ -12,6 +12,8 @@ namespace CreativeMode
 
         public static string CreativeMark => Pick("Creative", "Créatif");
 
+        public static string FlySpeed(string mark) => Pick("Fly " + mark, "Vol " + mark);
+
         static string Pick(string english, string french)
         {
             try

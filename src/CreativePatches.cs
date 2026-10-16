@@ -20,7 +20,6 @@ using UI.MainMenu.Common;
 using UI.Status;
 using UI.Warnings;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 namespace CreativeMode
@@ -284,15 +283,10 @@ namespace CreativeMode
 
             object common = Traverse.Create(__instance).Field("_playerPhysicsCommon").GetValue();
             PlayerMovementSettings settings = Traverse.Create(common).Property("MovementSettings").GetValue<PlayerMovementSettings>();
-            if (settings == null)
-                return;
-
-            bool sprint = Keyboard.current != null
-                && (Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed);
-            float speed = sprint ? settings.sprintingSpeed : settings.walkingSpeed;
-            if (speed < 0.1f)
-                speed = settings.walkingSpeed;
-            __result = speed;
+            float walk = settings != null ? settings.walkingSpeed : 4f;
+            if (walk < 0.1f)
+                walk = 4f;
+            __result = walk * CreativeFlight.SpeedScale();
         }
     }
 

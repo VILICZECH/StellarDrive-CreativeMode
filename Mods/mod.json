@@ -2,7 +2,7 @@
     "id": "CreativeMode",
     "name": "Creative mode",
     "author": "VILIK",
-    "version": "1.1.0",
+    "version": "1.4.0",
     "description": "Need creative mode? Build anything you can imagine without grinding for a single material.\n\nPick Creative when you create a new world and you get:\n• Free building: no materials needed and all research unlocked\n• No health or oxygen to worry about\n• Fly freely: double-tap Space to toggle flight\n• Your tools ready in the quick bar\n• Middle-click with the build tool to pick the part you are looking at\n• Shift-click to stack hull blocks in a line, scroll to set the length (up to 16)\n• Ctrl+Z to undo and Ctrl+Y to redo placements\n• Refill wood thrusters, generators and distillers, or give them infinite fuel",
     "thumbnail": "thumbnail.jpg",
     "videos": [
