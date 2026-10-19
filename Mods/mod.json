@@ -1,7 +1,7 @@
 {
   "id": "CreativeMode",
   "name": "Creative mode",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "author": "VILIK",
   "description": "Need creative mode? Build anything you can imagine without grinding for a single material.\n\nPick Creative when you create a new world and you get:\n• Free building: no materials needed, research and the journal unlocked, and parts from other mods in a Mods tab\n• No health or oxygen to worry about\n• Tools ready in the quick bar\n• Middle-click picks the part you are looking at, even without the build tool\n• Shift-click stacks hull blocks in a line. Scroll sets the length up to 16, then click places it\n• Ctrl+Z undoes your own last placement, removal or cable. Ctrl+Y restores it. Each player has a separate history\n• Refill wood thrusters, generators and distillers, or give them infinite fuel\n\nFlight, double-tap Space:\n• The mode you are in stays, walking or flying\n• Speed eases in when you move and eases out when you let go. Flying through a ship does not drag you with it\n• Shift+scroll sets speed from ¼× to 128× walking speed. A short label shows the step\n• Hold Shift while moving to fly at double that speed\n• F uses whatever you look at: levers, chests, seats and other devices\n• When a device has taken WASD, Space, Ctrl and Shift, those keys run the device and movement pauses. In flight you stay aloft\n• Hold Left Alt to move again. The device stays open and takes the keys back when you let go",
   "thumbnail": "thumbnail.jpg",

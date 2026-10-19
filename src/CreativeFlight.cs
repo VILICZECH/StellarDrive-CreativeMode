@@ -35,6 +35,7 @@ namespace CreativeMode
         static readonly string[] GearMark = { "¼×", "½×", "1×", "2×", "4×", "8×", "16×", "32×", "64×", "128×" };
 
         static float _lastTap = -1f;
+        static int _tapFrame = -1;
         static int _gear = 2;
         static int _scrollFrame = -1;
         static float _hintUntil;
@@ -82,8 +83,31 @@ namespace CreativeMode
             Keyboard keyboard = Keyboard.current;
             UseLookedAt(keyboard);
             PlugSnappedCable();
-            if (keyboard == null || !keyboard.spaceKey.wasPressedThisFrame)
+            if (keyboard != null && keyboard.spaceKey.wasPressedThisFrame)
+                RegisterTap();
+        }
+
+        // Jump is the game's space binding. Counting it here still works when Keyboard.current
+        // has already moved on by the time OnUpdate runs. One press can notify both controls.
+        public static void NoteJump(InputAction.CallbackContext context)
+        {
+            if (context.canceled || (!context.started && !context.performed))
                 return;
+            if (context.performed && !context.started && context.ReadValue<float>() < 0.5f)
+                return;
+            RegisterTap();
+        }
+
+        static void RegisterTap()
+        {
+            if (_tapFrame == Time.frameCount)
+                return;
+            _tapFrame = Time.frameCount;
+            if (!CreativeSession.IsActive || !StellarDriveMods.Shared.GameKeys.Free())
+            {
+                _lastTap = -1f;
+                return;
+            }
 
             float now = Time.unscaledTime;
             if (_lastTap < 0f || now - _lastTap > DoubleTapSeconds)
@@ -99,11 +123,13 @@ namespace CreativeMode
         static void Toggle()
         {
             PlayerControlsActivator activator = LocalActivator();
-            PlayerCheatControls controls = activator != null ? activator.GetComponentInChildren<PlayerCheatControls>(true) : null;
-            if (controls == null || !controls.isActiveAndEnabled)
+            if (activator == null)
                 return;
-
-            PlayerNetworkInputs inputs = Traverse.Create(controls).Field("_inputs").GetValue<PlayerNetworkInputs>();
+            // Cheat controls are not in the walking script list, so they are often disabled while standing.
+            PlayerCheatControls controls = activator.GetComponentInChildren<PlayerCheatControls>(true);
+            PlayerNetworkInputs inputs = controls != null ? Traverse.Create(controls).Field("_inputs").GetValue<PlayerNetworkInputs>() : null;
+            if (inputs == null)
+                inputs = activator.GetComponentInChildren<PlayerNetworkInputs>(true);
             if (inputs == null)
                 return;
 
@@ -1067,6 +1093,24 @@ namespace CreativeMode
                 return true;
             CreativeFlight.BumpScroll(context);
             return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerWalkingControls), "OnJump")]
+    static class WalkJumpTogglesFlight
+    {
+        static void Postfix(InputAction.CallbackContext context)
+        {
+            CreativeFlight.NoteJump(context);
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerCheatFlyControls), "OnJump")]
+    static class FlyJumpTogglesFlight
+    {
+        static void Postfix(InputAction.CallbackContext context)
+        {
+            CreativeFlight.NoteJump(context);
         }
     }
 
