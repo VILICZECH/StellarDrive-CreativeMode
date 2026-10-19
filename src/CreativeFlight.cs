@@ -795,30 +795,40 @@ namespace CreativeMode
     {
         const float EaseSeconds = 0.18f;
 
-        static void Prefix(PlayerPhysicsStepContext context, out bool __smooth, out Vector3 __pos, out Vector3 __vel, out float __dt)
+        sealed class Ease
         {
-            __smooth = CreativeSession.IsActive;
-            __pos = context.State.Position;
-            __vel = context.State.Velocity;
-            __dt = context.DeltaTime;
+            public bool Smooth;
+            public Vector3 Pos;
+            public Vector3 Vel;
+            public float Dt;
         }
 
-        static void Postfix(ref PlayerPhysicsStepResult __result, bool __smooth, Vector3 __pos, Vector3 __vel, float __dt)
+        // This Harmony build only carries one prefix value, and only under the name __state.
+        static void Prefix(PlayerPhysicsStepContext context, out Ease __state)
         {
-            if (!__smooth)
+            __state = new Ease();
+            __state.Smooth = CreativeSession.IsActive;
+            __state.Pos = context.State.Position;
+            __state.Vel = context.State.Velocity;
+            __state.Dt = context.DeltaTime;
+        }
+
+        static void Postfix(ref PlayerPhysicsStepResult __result, Ease __state)
+        {
+            if (__state == null || !__state.Smooth)
                 return;
-            if (__dt > 0.0001f)
+            if (__state.Dt > 0.0001f)
             {
-                Vector3 instant = (__result.State.Position - __pos) / __dt;
+                Vector3 instant = (__result.State.Position - __state.Pos) / __state.Dt;
                 float rate = instant.magnitude;
-                float carried = __vel.magnitude;
+                float carried = __state.Vel.magnitude;
                 if (carried > rate)
                     rate = carried;
                 if (rate < 4f)
                     rate = 4f;
-                Vector3 velocity = Vector3.MoveTowards(__vel, instant, rate / EaseSeconds * __dt);
+                Vector3 velocity = Vector3.MoveTowards(__state.Vel, instant, rate / EaseSeconds * __state.Dt);
                 PlayerPhysicsState state = __result.State;
-                state.Position = __pos + velocity * __dt;
+                state.Position = __state.Pos + velocity * __state.Dt;
                 state.Velocity = velocity;
                 __result.State = state;
             }
@@ -864,21 +874,26 @@ namespace CreativeMode
     [HarmonyPatch(typeof(LocalPlayerPhysicsPredictions), "ProcessPhysicsStep")]
     static class PredictLanding
     {
-        static void Prefix(out bool __ran, out uint __state)
+        sealed class Scope
         {
-            __ran = false;
-            __state = uint.MaxValue;
+            public bool Ran;
+            public uint Previous;
+        }
+
+        static void Prefix(out Scope __state)
+        {
+            __state = new Scope();
             uint id;
             if (!CreativeFlight.TryLocalId(out id))
                 return;
-            __ran = true;
-            __state = CreativeFlight.PushPhysics(id);
+            __state.Ran = true;
+            __state.Previous = CreativeFlight.PushPhysics(id);
         }
 
-        static void Postfix(bool __ran, uint __state)
+        static void Postfix(Scope __state)
         {
-            if (__ran)
-                CreativeFlight.PopPhysics(__state);
+            if (__state != null && __state.Ran)
+                CreativeFlight.PopPhysics(__state.Previous);
         }
     }
 
