@@ -161,6 +161,7 @@ namespace CreativeMode
                 inputs.RpcLogic___ToggleCheatFlyState_ServerRPC___2166136261();
             else
                 inputs.ToggleCheatFlyState_ServerRPC();
+            DriveHeldKeys();
         }
 
         static PlayerNetworkInputs FlightInputs()
@@ -386,26 +387,45 @@ namespace CreativeMode
                 y -= 1f;
             if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
                 y += 1f;
-            bool down = x * x + y * y > 0.01f;
+            bool up = keyboard.spaceKey.isPressed;
+            bool descend = !up && (keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed);
+            bool down = x * x + y * y > 0.01f || up || descend;
             if (!down && !_heldKeys)
                 return;
             _heldKeys = down;
-            PlayerControlsActivator activator = LocalActivator();
-            if (activator == null)
+            Transform root = LocalControlsRoot();
+            if (root == null)
                 return;
             if (FlyingNow())
             {
-                PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>();
-                if (fly == null || !fly.isActiveAndEnabled)
+                PlayerCheatFlyControls fly = root.GetComponentInChildren<PlayerCheatFlyControls>(true);
+                if (fly == null)
                     return;
                 fly.moveInput.x = x;
                 fly.moveInput.z = y;
+                fly.moveInput.y = up ? 1f : (descend ? -1f : 0f);
                 return;
             }
-            PlayerWalkingControls walking = activator.GetComponentInChildren<PlayerWalkingControls>();
-            if (walking == null || !walking.isActiveAndEnabled)
+            PlayerWalkingControls walking = root.GetComponentInChildren<PlayerWalkingControls>(true);
+            if (walking == null)
                 return;
             walking.moveInput = new Vector2(x, y);
+        }
+
+        static Transform LocalControlsRoot()
+        {
+            PlayerCheatControls[] controls = UnityEngine.Object.FindObjectsByType<PlayerCheatControls>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            PlayerCheatControls chosen = null;
+            for (int i = 0; i < controls.Length; i++)
+            {
+                PlayerNetworkInputs inputs = Traverse.Create(controls[i]).Field("_inputs").GetValue<PlayerNetworkInputs>();
+                if (inputs == null)
+                    continue;
+                chosen = controls[i];
+                if (inputs.IsOwner)
+                    break;
+            }
+            return chosen != null ? chosen.transform.root : null;
         }
 
         static void HoldDevice()
@@ -918,9 +938,6 @@ namespace CreativeMode
             if (fly == null)
                 return;
             fly.currentSpeed = CreativeFlight.SpeedScale();
-            Keyboard keyboard = Keyboard.current;
-            if (keyboard != null && keyboard.spaceKey.wasPressedThisFrame && fly.moveInput.y > 0f)
-                fly.moveInput.y = 0f;
         }
     }
 

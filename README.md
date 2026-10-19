@@ -14,7 +14,8 @@ Pick Creative when you create a new world and you get:
 - Refill wood thrusters, generators and distillers, or give them infinite fuel
 
 Flight, double-tap Space or press F1:
-- The mode you are in stays, walking or flying
+- The mode you are in stays, walking or flying. Held WASD stays held when you switch
+- Hold Space to ascend and Ctrl to descend
 - Speed eases in when you move and eases out when you let go. Flying through a ship does not drag you with it
 - Shift+scroll sets speed from ¼× to 128× walking speed. A short label shows the step
 - Hold Shift while moving to fly at double that speed
