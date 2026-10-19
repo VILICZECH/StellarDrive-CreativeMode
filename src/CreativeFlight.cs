@@ -36,6 +36,9 @@ namespace CreativeMode
 
         static float _lastTap = -1f;
         static int _tapFrame = -1;
+        static int _toggleFrame = -1;
+        static bool _spaceHeld;
+        static bool _f1Held;
         static int _gear = 2;
         static int _scrollFrame = -1;
         static float _hintUntil;
@@ -83,19 +86,61 @@ namespace CreativeMode
             Keyboard keyboard = Keyboard.current;
             UseLookedAt(keyboard);
             PlugSnappedCable();
-            if (keyboard != null && keyboard.spaceKey.wasPressedThisFrame)
-                RegisterTap();
+            TrackSpace(keyboard);
+            TrackFlyKey(keyboard);
         }
 
-        // Jump is the game's space binding. Counting it here still works when Keyboard.current
-        // has already moved on by the time OnUpdate runs. One press can notify both controls.
+        // One physical press is one tap. Jump also sends performed on the next frame, and that was
+        // counted as the second tap, so a double press turned flight on and straight back off.
         public static void NoteJump(InputAction.CallbackContext context)
         {
-            if (context.canceled || (!context.started && !context.performed))
+            if (context.canceled)
+            {
+                _spaceHeld = false;
                 return;
-            if (context.performed && !context.started && context.ReadValue<float>() < 0.5f)
+            }
+            if (!context.started)
                 return;
+            if (_spaceHeld)
+                return;
+            _spaceHeld = true;
             RegisterTap();
+        }
+
+        static void TrackSpace(Keyboard keyboard)
+        {
+            bool down = keyboard != null && keyboard.spaceKey.isPressed;
+            if (!down)
+            {
+                _spaceHeld = false;
+                return;
+            }
+            if (_spaceHeld)
+                return;
+            _spaceHeld = true;
+            RegisterTap();
+        }
+
+        static void TrackFlyKey(Keyboard keyboard)
+        {
+            bool down = keyboard != null && keyboard.f1Key.isPressed;
+            if (!down)
+            {
+                _f1Held = false;
+                return;
+            }
+            if (_f1Held)
+                return;
+            _f1Held = true;
+            ToggleFromKey();
+        }
+
+        public static void ToggleFromKey()
+        {
+            if (!CreativeSession.IsActive || !StellarDriveMods.Shared.GameKeys.Free())
+                return;
+            _lastTap = -1f;
+            Toggle();
         }
 
         static void RegisterTap()
@@ -122,6 +167,9 @@ namespace CreativeMode
 
         static void Toggle()
         {
+            if (_toggleFrame == Time.frameCount)
+                return;
+            _toggleFrame = Time.frameCount;
             PlayerControlsActivator activator = LocalActivator();
             if (activator == null)
                 return;
@@ -1115,11 +1163,15 @@ namespace CreativeMode
     }
 
     [HarmonyPatch(typeof(PlayerCheatControls), "ToggleFly")]
-    static class IgnoreAccidentalFlyKey
+    static class CreativeFlyKey
     {
-        static bool Prefix()
+        static bool Prefix(InputAction.CallbackContext context)
         {
-            return !CreativeSession.IsActive;
+            if (!CreativeSession.IsActive)
+                return true;
+            if (context.performed)
+                CreativeFlight.ToggleFromKey();
+            return false;
         }
     }
 
