@@ -2,7 +2,7 @@ using MelonLoader;
 using UI.Status;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.6.5", "VILIK")]
+[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.6.6", "VILIK")]
 [assembly: MelonGame("CuriousOwlGames", "StellarDrive")]
 
 namespace CreativeMode
@@ -27,6 +27,7 @@ namespace CreativeMode
             _researchDeadline = Time.unscaledTime + 20f;
             InfiniteFuel.Clear();
             BuildUndo.ClearHistory();
+            CreativeSession.ClearRemote();
             if (sceneName == "MainGame")
                 CreativeSession.RecordMissingAsSurvival();
             _vitalPasses = sceneName == "MainGame" && CreativeSession.IsActive ? 30 : 0;
@@ -39,6 +40,7 @@ namespace CreativeMode
         public override void OnUpdate()
         {
             BuildUndoNet.Ensure();
+            CreativeWorldNet.Tick();
             CreativeFlight.Tick();
             if (_vitalPasses > 0)
             {

@@ -22,11 +22,22 @@ namespace CreativeMode
 
         static string _cachedDirectory;
         static bool _cachedActive;
+        static bool _remoteKnown;
+        static bool _remoteCreative;
+
+        public static bool RemoteKnown
+        {
+            get { return _remoteKnown; }
+        }
 
         public static bool IsActive
         {
             get
             {
+                // A joined client has no copy of the host's save. The host says which world this is.
+                if (_remoteKnown && !RunsTheWorld())
+                    return _remoteCreative;
+
                 string directory = CurrentWorldDirectory();
                 if (directory != _cachedDirectory)
                 {
@@ -36,6 +47,39 @@ namespace CreativeMode
 
                 return _cachedActive;
             }
+        }
+
+        public static bool IsJoinedClient()
+        {
+            MainGameSceneLoadData.GameMode mode = MainGameSceneLoadData.Mode;
+            return mode == MainGameSceneLoadData.GameMode.JoinGameSteam
+                || mode == MainGameSceneLoadData.GameMode.JoinGameIp;
+        }
+
+        static bool RunsTheWorld()
+        {
+            try
+            {
+                return FishNet.InstanceFinder.IsServerStarted;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        public static void ApplyRemote(bool creative)
+        {
+            _remoteKnown = true;
+            _remoteCreative = creative;
+            _cachedDirectory = null;
+        }
+
+        public static void ClearRemote()
+        {
+            _remoteKnown = false;
+            _remoteCreative = false;
+            _cachedDirectory = null;
         }
 
         public static string CurrentWorldDirectory()
@@ -69,6 +113,8 @@ namespace CreativeMode
 
         public static void RecordMissingAsSurvival()
         {
+            if (IsJoinedClient())
+                return;
             _cachedDirectory = null;
             string directory = CurrentWorldDirectory();
             if (string.IsNullOrEmpty(directory))

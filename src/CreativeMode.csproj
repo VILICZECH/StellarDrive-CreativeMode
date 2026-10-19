@@ -7,7 +7,7 @@
     <TargetFramework>net472</TargetFramework>
     <AssemblyName>CreativeMod</AssemblyName>
     <RootNamespace>CreativeMode</RootNamespace>
-    <Version>1.6.5</Version>
+    <Version>1.6.6</Version>
     <Description>Need creative mode? Build anything you can imagine without grinding for a single material.</Description>
     <LangVersion>latest</LangVersion>
     <PlatformTarget>x64</PlatformTarget>
