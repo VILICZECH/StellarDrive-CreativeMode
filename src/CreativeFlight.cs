@@ -47,6 +47,11 @@ namespace CreativeMode
         static readonly HashSet<int> FlewIntoUse = new HashSet<int>();
         static int _leftClient = int.MinValue;
         static int _leftFrame = -1;
+        public static bool UsingDevice
+        {
+            get { return _deviceOpen; }
+        }
+
         static bool _deviceOpen;
         static bool _keepFlight;
         static uint _useShip;
@@ -428,16 +433,20 @@ namespace CreativeMode
             return chosen != null ? chosen.transform.root : null;
         }
 
+        static void DropStuckMove()
+        {
+            _heldKeys = false;
+            StopBody(LocalControlsRoot());
+        }
+
         static void HoldDevice()
         {
-            PlayerControlsActivator activator = LocalActivator();
-            if (activator == null)
-                return;
+            Transform root = LocalControlsRoot();
             bool alt = LeftAlt();
             PlayerStateType type;
             StellarDriveMods.Shared.GameKeys.TryGetState(out type);
-            PlayerLeverControl lever = activator.GetComponentInChildren<PlayerLeverControl>(true);
-            PlayerPilotingControls pilot = activator.GetComponentInChildren<PlayerPilotingControls>(true);
+            PlayerLeverControl lever = root != null ? root.GetComponentInChildren<PlayerLeverControl>(true) : null;
+            PlayerPilotingControls pilot = root != null ? root.GetComponentInChildren<PlayerPilotingControls>(true) : null;
             if (lever != null)
             {
                 bool on = !alt && type == PlayerStateType.InteractingWithLever;
@@ -459,7 +468,7 @@ namespace CreativeMode
             }
             if (!alt)
             {
-                StopBody(activator);
+                DropStuckMove();
                 return;
             }
             Keyboard keyboard = Keyboard.current;
@@ -475,7 +484,7 @@ namespace CreativeMode
                 y -= 1f;
             if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
                 y += 1f;
-            PlayerWalkingControls walk = activator.GetComponentInChildren<PlayerWalkingControls>(true);
+            PlayerWalkingControls walk = root != null ? root.GetComponentInChildren<PlayerWalkingControls>(true) : null;
             if (walk == null)
                 return;
             walk.moveInput = new Vector2(x, y);
@@ -483,7 +492,7 @@ namespace CreativeMode
             bool down = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
             walk.jumpInput = up ? 1f : 0f;
             walk.crouchInput = down && !up ? 1f : 0f;
-            PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>(true);
+            PlayerCheatFlyControls fly = root.GetComponentInChildren<PlayerCheatFlyControls>(true);
             if (fly == null)
                 return;
             fly.moveInput.x = x;
@@ -491,16 +500,18 @@ namespace CreativeMode
             fly.moveInput.y = up ? 1f : (down ? -1f : 0f);
         }
 
-        static void StopBody(PlayerControlsActivator activator)
+        static void StopBody(Transform root)
         {
-            PlayerWalkingControls walk = activator.GetComponentInChildren<PlayerWalkingControls>(true);
+            if (root == null)
+                return;
+            PlayerWalkingControls walk = root.GetComponentInChildren<PlayerWalkingControls>(true);
             if (walk != null)
             {
                 walk.moveInput = Vector2.zero;
                 walk.jumpInput = 0f;
                 walk.crouchInput = 0f;
             }
-            PlayerCheatFlyControls fly = activator.GetComponentInChildren<PlayerCheatFlyControls>(true);
+            PlayerCheatFlyControls fly = root.GetComponentInChildren<PlayerCheatFlyControls>(true);
             if (fly != null)
                 fly.moveInput = Vector3.zero;
         }
@@ -595,6 +606,8 @@ namespace CreativeMode
             body.Ship = state.EntityId;
             body.Part = state.PartId;
             MirrorLocal(id, body);
+            if (LocalId(out uint mine) && mine == id)
+                DropStuckMove();
         }
 
         public static void CloseDevice(uint id)
@@ -608,6 +621,7 @@ namespace CreativeMode
             {
                 _deviceOpen = false;
                 _keepFlight = false;
+                DropStuckMove();
             }
         }
 
@@ -1116,6 +1130,25 @@ namespace CreativeMode
                 return true;
             service.StopInteract();
             return false;
+        }
+    }
+
+    // W on a lever is the lever. The fly and walk listeners must not keep that press as movement.
+    [HarmonyPatch(typeof(PlayerCheatFlyControls), "OnMove")]
+    static class FlyMoveBelongsToDevice
+    {
+        static bool Prefix()
+        {
+            return !CreativeSession.IsActive || !CreativeFlight.UsingDevice;
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerWalkingControls), "OnMove")]
+    static class WalkMoveBelongsToDevice
+    {
+        static bool Prefix()
+        {
+            return !CreativeSession.IsActive || !CreativeFlight.UsingDevice;
         }
     }
 
