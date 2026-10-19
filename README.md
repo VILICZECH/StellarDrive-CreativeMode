@@ -10,11 +10,12 @@ Pick Creative when you create a new world and you get:
 - Tools ready in the quick bar
 - Middle-click picks the part you are looking at, even without the build tool
 - Shift-click stacks hull blocks in a line. Scroll sets the length up to 16, then click places it
-- Ctrl+Z undoes the last placement or cable, Ctrl+Y restores it
+- Ctrl+Z undoes your own last placement, removal or cable. Ctrl+Y restores it. Each player has a separate history
 - Refill wood thrusters, generators and distillers, or give them infinite fuel
 
 Flight, double-tap Space:
 - The mode you are in stays, walking or flying
+- Speed eases in when you move and eases out when you let go. Flying through a ship does not drag you with it
 - Shift+scroll sets speed from ¼× to 128× walking speed. A short label shows the step
 - Hold Shift while moving to fly at double that speed
 - F uses whatever you look at: levers, chests, seats and other devices
@@ -48,13 +49,14 @@ The DLL ends up in `src/bin/Release`. Add `-p:CopyToMods=true` to copy it into t
 | `ModePicker.cs` | The Creative / Survival dialog before a new world is created |
 | `GameText.cs` | Localized strings taken from the game |
 | `CreativePatches.cs` | Tools, free build, health, oxygen, collision damage and the tutorial |
-| `CreativeFlight.cs` | Double-tap Space to fly, Shift+scroll for speed, and device controls that keep walk or fly |
+| `CreativeFlight.cs` | Double-tap Space to fly, eased speed, Shift+scroll, and device controls that keep walk or fly |
 | `CreativeCatalog.cs` | Unlocks every part and feature and ignores build costs |
 | `CreativeResearch.cs` | Unlocks research |
 | `CreativeJournal.cs` | Marks journal entries as read |
 | `PickLookedAtPart.cs` | Middle-click picks the part you are looking at |
 | `BuildLine.cs` | Shift-click stacks hull blocks in a line |
-| `BuildUndo.cs` | Ctrl+Z and Ctrl+Y for placements and cables |
+| `BuildUndo.cs` | Ctrl+Z and Ctrl+Y for each player's own placements, removals and cables |
+| `BuildUndoNet.cs` | Asks the host to undo that player's own cables |
 | `FuelCreative.cs` | Refill or infinite fuel on wood thrusters, generators and distillers |
 | `Shared/GameKeys.cs` | Keeps the mod's keys away from the chat, text fields and game menus |
 

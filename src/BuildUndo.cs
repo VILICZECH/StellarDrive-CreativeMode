@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Core.Services;
+using FishNet.Connection;
 using HarmonyLib;
 using Managers.Interface.Model;
 using Managers.Interface.Services;
@@ -31,6 +32,13 @@ namespace CreativeMode
         static int _watch;
         static bool _applying;
         static int _quietFrame = -1;
+        static int _seq;
+        static NetworkConnection _actor;
+        static bool _actorLocal;
+        static readonly List<CableChange> CableBatch = new List<CableChange>();
+        static readonly List<Step> Deferred = new List<Step>();
+        static readonly Dictionary<int, List<Step>> RemoteUndo = new Dictionary<int, List<Step>>();
+        static readonly Dictionary<int, List<Step>> RemoteRedo = new Dictionary<int, List<Step>>();
         static string _note;
         static float _noteUntil;
 
@@ -81,6 +89,9 @@ namespace CreativeMode
         {
             UndoSteps.Clear();
             RedoSteps.Clear();
+            Deferred.Clear();
+            RemoteUndo.Clear();
+            RemoteRedo.Clear();
             _note = null;
             _noteUntil = 0f;
         }
@@ -122,36 +133,132 @@ namespace CreativeMode
         {
             if (!WatchingCables)
                 return;
-            Step step = new Step();
-            step.Cable = new CableChange();
-            step.Cable.Id = id;
-            step.Cable.Created = true;
-            step.Cable.After = state;
-            Push(step);
+            CableChange change = new CableChange();
+            change.Id = id;
+            change.Created = true;
+            change.After = state;
+            KeepCable(change);
         }
 
         public static void RecordCableUpdated(uint id, CableState before, CableState after)
         {
             if (!WatchingCables)
                 return;
-            Step step = new Step();
-            step.Cable = new CableChange();
-            step.Cable.Id = id;
-            step.Cable.Before = before;
-            step.Cable.After = after;
-            Push(step);
+            CableChange change = new CableChange();
+            change.Id = id;
+            change.Before = before;
+            change.After = after;
+            KeepCable(change);
         }
 
         public static void RecordCableDeleted(uint id, CableState state)
         {
             if (!WatchingCables)
                 return;
+            CableChange change = new CableChange();
+            change.Id = id;
+            change.Deleted = true;
+            change.Before = state;
+            KeepCable(change);
+        }
+
+        public static void BeginCableActor(object service, NetworkConnection connection)
+        {
+            _actor = connection;
+            _actorLocal = CreativeFlight.IsLocalConnection(service, connection);
+            CableBatch.Clear();
+            if (CreativeSession.IsActive)
+                WatchCables(true);
+        }
+
+        public static void EndCableActor()
+        {
+            bool local = _actorLocal;
+            NetworkConnection actor = _actor;
+            WatchCables(false);
+            if (!local && actor != null && CreativeSession.IsActive)
+            {
+                if (CableBatch.Count == 0)
+                    BuildUndoNet.Tell(actor, BuildUndoNet.Reject);
+                else
+                {
+                    Step step = new Step();
+                    for (int i = 0; i < CableBatch.Count; i++)
+                        step.Batch.Add(CableBatch[i]);
+                    List<Step> stack = RemoteStack(RemoteUndo, actor.ClientId);
+                    stack.Add(step);
+                    if (stack.Count > MaxSteps)
+                        stack.RemoveAt(0);
+                    RemoteStack(RemoteRedo, actor.ClientId).Clear();
+                    BuildUndoNet.Tell(actor, BuildUndoNet.Commit);
+                }
+            }
+            CableBatch.Clear();
+            _actor = null;
+            _actorLocal = false;
+        }
+
+        public static void MarkOwnCable()
+        {
+            if (!CreativeSession.IsActive || Applying || FishNet.InstanceFinder.IsServerStarted)
+                return;
             Step step = new Step();
-            step.Cable = new CableChange();
-            step.Cable.Id = id;
-            step.Cable.Deleted = true;
-            step.Cable.Before = state;
+            step.Remote = true;
+            step.Pending = true;
+            step.Seq = ++_seq;
             Push(step);
+        }
+
+        public static void OnCableCommit()
+        {
+            Step step = OldestPending();
+            if (step == null)
+                return;
+            step.Pending = false;
+            DrainDeferred();
+        }
+
+        public static void OnCableReject()
+        {
+            Step step = OldestPending();
+            if (step == null)
+                return;
+            UndoSteps.Remove(step);
+            Deferred.Remove(step);
+            DrainDeferred();
+        }
+
+        public static void ServerCable(int clientId, byte kind)
+        {
+            if (kind == BuildUndoNet.ClearRedo)
+            {
+                RemoteStack(RemoteRedo, clientId).Clear();
+                return;
+            }
+            bool redo = kind == BuildUndoNet.RedoCable;
+            Dictionary<int, List<Step>> from = redo ? RemoteRedo : RemoteUndo;
+            Dictionary<int, List<Step>> to = redo ? RemoteUndo : RemoteRedo;
+            List<Step> stack = RemoteStack(from, clientId);
+            if (stack.Count == 0)
+                return;
+            Step step = stack[stack.Count - 1];
+            stack.RemoveAt(stack.Count - 1);
+            _applying = true;
+            try
+            {
+                ApplyBatch(step, redo);
+            }
+            finally
+            {
+                _applying = false;
+            }
+            RemoteStack(to, clientId).Add(step);
+        }
+
+        public static void ForgetRemote(int clientId)
+        {
+            RemoteUndo.Remove(clientId);
+            RemoteRedo.Remove(clientId);
         }
 
         public static void Tick()
@@ -184,6 +291,12 @@ namespace CreativeMode
 
             Step step = UndoSteps[UndoSteps.Count - 1];
             UndoSteps.RemoveAt(UndoSteps.Count - 1);
+            if (step.Remote)
+            {
+                Deferred.Add(step);
+                DrainDeferred();
+                return;
+            }
             Apply(step, false);
             RedoSteps.Add(step);
             Show(step.Pieces.Count > 1 ? "Undone " + step.Pieces.Count : "Undone");
@@ -199,7 +312,10 @@ namespace CreativeMode
 
             Step step = RedoSteps[RedoSteps.Count - 1];
             RedoSteps.RemoveAt(RedoSteps.Count - 1);
-            Apply(step, true);
+            if (step.Remote)
+                BuildUndoNet.Ask(BuildUndoNet.RedoCable);
+            else
+                Apply(step, true);
             UndoSteps.Add(step);
             Show(step.Pieces.Count > 1 ? "Redone " + step.Pieces.Count : "Redone");
         }
@@ -243,9 +359,112 @@ namespace CreativeMode
         static void Push(Step step)
         {
             RedoSteps.Clear();
+            if (!FishNet.InstanceFinder.IsServerStarted)
+                BuildUndoNet.Ask(BuildUndoNet.ClearRedo);
             UndoSteps.Add(step);
             if (UndoSteps.Count > MaxSteps)
                 UndoSteps.RemoveAt(0);
+        }
+
+        static void KeepCable(CableChange change)
+        {
+            if (_actor != null && !_actorLocal)
+            {
+                CableBatch.Add(change);
+                return;
+            }
+            Step step = new Step();
+            step.Cable = change;
+            Push(step);
+        }
+
+        static List<Step> RemoteStack(Dictionary<int, List<Step>> stacks, int clientId)
+        {
+            List<Step> stack;
+            if (!stacks.TryGetValue(clientId, out stack))
+            {
+                stack = new List<Step>();
+                stacks[clientId] = stack;
+            }
+            return stack;
+        }
+
+        static Step OldestPending()
+        {
+            Step found = null;
+            for (int i = 0; i < UndoSteps.Count; i++)
+            {
+                Step step = UndoSteps[i];
+                if (step.Remote && step.Pending && (found == null || step.Seq < found.Seq))
+                    found = step;
+            }
+            for (int i = 0; i < Deferred.Count; i++)
+            {
+                Step step = Deferred[i];
+                if (step.Pending && (found == null || step.Seq < found.Seq))
+                    found = step;
+            }
+            return found;
+        }
+
+        // The host undoes the newest cable it stored. Wait until that same step is the one the player already stepped back.
+        static void DrainDeferred()
+        {
+            bool any = false;
+            while (Deferred.Count > 0)
+            {
+                Step newest = NewestRemote();
+                if (newest == null || newest.Pending || !Deferred.Contains(newest))
+                    break;
+                Deferred.Remove(newest);
+                RedoSteps.Add(newest);
+                BuildUndoNet.Ask(BuildUndoNet.UndoCable);
+                any = true;
+            }
+            if (any)
+                Show("Undone");
+        }
+
+        static Step NewestRemote()
+        {
+            Step found = null;
+            for (int i = 0; i < UndoSteps.Count; i++)
+            {
+                Step step = UndoSteps[i];
+                if (step.Remote && (found == null || step.Seq > found.Seq))
+                    found = step;
+            }
+            for (int i = 0; i < Deferred.Count; i++)
+            {
+                Step step = Deferred[i];
+                if (found == null || step.Seq > found.Seq)
+                    found = step;
+            }
+            return found;
+        }
+
+        static void ApplyBatch(Step step, bool redo)
+        {
+            if (step.Batch.Count == 0)
+            {
+                if (step.Cable == null)
+                    return;
+                if (redo)
+                    RedoCable(step.Cable);
+                else
+                    UndoCable(step.Cable);
+                return;
+            }
+            if (redo)
+            {
+                for (int i = 0; i < step.Batch.Count; i++)
+                    RedoCable(step.Batch[i]);
+            }
+            else
+            {
+                for (int i = step.Batch.Count - 1; i >= 0; i--)
+                    UndoCable(step.Batch[i]);
+            }
         }
 
         static void UndoCable(CableChange change)
@@ -383,7 +602,11 @@ namespace CreativeMode
         class Step
         {
             public readonly List<Piece> Pieces = new List<Piece>();
+            public readonly List<CableChange> Batch = new List<CableChange>();
             public bool Removal;
+            public bool Remote;
+            public bool Pending;
+            public int Seq;
             public CableChange Cable;
         }
 
@@ -418,59 +641,95 @@ namespace CreativeMode
         }
     }
 
-    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___AddNewCable_ServerRPC___1176123958")]
-    static class WatchNewCable
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "AddNewCable")]
+    static class NoteOwnNewCable
     {
         static void Prefix()
         {
-            BuildUndo.WatchCables(true);
+            BuildUndo.MarkOwnCable();
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "PickUpCable")]
+    static class NoteOwnPickupCable
+    {
+        static void Prefix()
+        {
+            BuildUndo.MarkOwnCable();
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "PlugInCable")]
+    static class NoteOwnPlugCable
+    {
+        static void Prefix()
+        {
+            BuildUndo.MarkOwnCable();
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "DropCable")]
+    static class NoteOwnDropCable
+    {
+        static void Prefix()
+        {
+            BuildUndo.MarkOwnCable();
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___AddNewCable_ServerRPC___1176123958")]
+    static class WatchNewCable
+    {
+        static void Prefix(object __instance, NetworkConnection __1)
+        {
+            BuildUndo.BeginCableActor(__instance, __1);
         }
 
         static void Postfix()
         {
-            BuildUndo.WatchCables(false);
+            BuildUndo.EndCableActor();
         }
     }
 
     [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___PickUpCable_ServerRPC___1176123958")]
     static class WatchPickupCable
     {
-        static void Prefix()
+        static void Prefix(object __instance, NetworkConnection __1)
         {
-            BuildUndo.WatchCables(true);
+            BuildUndo.BeginCableActor(__instance, __1);
         }
 
         static void Postfix()
         {
-            BuildUndo.WatchCables(false);
+            BuildUndo.EndCableActor();
         }
     }
 
     [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___PlugInCable_ServerRPC___1176123958")]
     static class WatchPlugCable
     {
-        static void Prefix()
+        static void Prefix(object __instance, NetworkConnection __1)
         {
-            BuildUndo.WatchCables(true);
+            BuildUndo.BeginCableActor(__instance, __1);
         }
 
         static void Postfix()
         {
-            BuildUndo.WatchCables(false);
+            BuildUndo.EndCableActor();
         }
     }
 
     [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___DropCable_ServerRPC___328543758")]
     static class WatchDropCable
     {
-        static void Prefix()
+        static void Prefix(object __instance, NetworkConnection __0)
         {
-            BuildUndo.WatchCables(true);
+            BuildUndo.BeginCableActor(__instance, __0);
         }
 
         static void Postfix()
         {
-            BuildUndo.WatchCables(false);
+            BuildUndo.EndCableActor();
         }
     }
 
@@ -521,13 +780,14 @@ namespace CreativeMode
         }
     }
 
-    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___RemoveHullPart_ServerRPC___930806135")]
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RemoveHullPart")]
     static class RecordHullRemoval
     {
-        static void Prefix(RemoveHullPartNetworkRequest __0)
+        static void Prefix(RemoveHullPartNetworkRequest request)
         {
             if (!CreativeSession.IsActive || BuildUndo.Applying)
                 return;
+            RemoveHullPartNetworkRequest __0 = request;
             IShipsClientProvider ships = ServiceLocator.GetService<IShipsClientProvider>();
             if (ships == null || !ships.TryGetShip(__0.ShipId, out IShipStateReadClient client))
                 return;
@@ -546,13 +806,14 @@ namespace CreativeMode
         }
     }
 
-    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___RemoveFloatingPart_ServerRPC___1471205784")]
+    [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RemoveFloatingPart")]
     static class RecordFloatingRemoval
     {
-        static void Prefix(RemoveFloatingPartNetworkRequest __0)
+        static void Prefix(RemoveFloatingPartNetworkRequest request)
         {
             if (!CreativeSession.IsActive || BuildUndo.Applying)
                 return;
+            RemoveFloatingPartNetworkRequest __0 = request;
             IShipsClientProvider ships = ServiceLocator.GetService<IShipsClientProvider>();
             if (ships == null || !ships.TryGetShip(__0.ShipId, out IShipStateReadClient client))
                 return;

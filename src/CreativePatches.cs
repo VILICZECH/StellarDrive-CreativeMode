@@ -274,19 +274,23 @@ namespace CreativeMode
     {
         static void Postfix(PlayerCheatFlyPhysics __instance, Vector3 moveInput, ref float __result)
         {
-            if (!CreativeSession.IsActive || moveInput.sqrMagnitude < 0.0001f)
+            if (!CreativeSession.IsActive)
+                return;
+            float scale = moveInput.magnitude;
+            if (scale < 0.0001f)
             {
-                if (CreativeSession.IsActive)
-                    __result = 0f;
+                __result = 0f;
                 return;
             }
+            if (scale > 256f)
+                scale = 256f;
 
             object common = Traverse.Create(__instance).Field("_playerPhysicsCommon").GetValue();
             PlayerMovementSettings settings = Traverse.Create(common).Property("MovementSettings").GetValue<PlayerMovementSettings>();
             float walk = settings != null ? settings.walkingSpeed : 4f;
             if (walk < 0.1f)
                 walk = 4f;
-            __result = walk * CreativeFlight.SpeedScale();
+            __result = walk * scale;
         }
     }
 

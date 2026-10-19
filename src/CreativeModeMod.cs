@@ -2,7 +2,7 @@ using MelonLoader;
 using UI.Status;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.5.0", "VILIK")]
+[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.6.0", "VILIK")]
 [assembly: MelonGame("CuriousOwlGames", "StellarDrive")]
 
 namespace CreativeMode
@@ -38,6 +38,7 @@ namespace CreativeMode
 
         public override void OnUpdate()
         {
+            BuildUndoNet.Ensure();
             CreativeFlight.Tick();
             if (_vitalPasses > 0)
             {

@@ -8,6 +8,7 @@ using Players;
 using Players.Interface.Model;
 using Players.LocalClient;
 using Players.LocalClient.Controls;
+using Players.LocalClient.Controls.Capture;
 using Players.LocalClient.Controls.Input;
 using Players.LocalClient.Interaction;
 using Players.Network;
@@ -15,6 +16,7 @@ using Players.Network.Model;
 using Players.Physics;
 using Players.Physics.Model;
 using Players.Services;
+using Ships.Interface.Model.State;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -37,17 +39,17 @@ namespace CreativeMode
         static int _scrollFrame = -1;
         static float _hintUntil;
         static TMP_Text _hint;
-        static int _settle;
         static int _plugFrame = -1;
         static readonly HashSet<int> FlewIntoUse = new HashSet<int>();
+        static int _leftClient = int.MinValue;
+        static int _leftFrame = -1;
         static bool _deviceOpen;
         static bool _keepFlight;
-        static bool _pendingFly;
         static uint _useShip;
         static ushort _usePart;
-        static bool _safe;
-        static uint _safeSpace;
-        static Vector3 _safePos;
+        [System.ThreadStatic] static bool _step;
+        [System.ThreadStatic] static uint _stepId;
+        static readonly Dictionary<uint, Body> Bodies = new Dictionary<uint, Body>();
         static float _savedReach = -1f;
         static bool _reachWidened;
         static bool _heldKeys;
@@ -64,6 +66,7 @@ namespace CreativeMode
             }
 
             KeepInteractions();
+            NoteLanding();
             PaintSpeed();
             // A space typed into the chat or a name must not count as a tap.
             if (_deviceOpen && !StellarDriveMods.Shared.GameKeys.Typing())
@@ -95,7 +98,8 @@ namespace CreativeMode
 
         static void Toggle()
         {
-            PlayerCheatControls controls = Object.FindAnyObjectByType<PlayerCheatControls>();
+            PlayerControlsActivator activator = LocalActivator();
+            PlayerCheatControls controls = activator != null ? activator.GetComponentInChildren<PlayerCheatControls>(true) : null;
             if (controls == null || !controls.isActiveAndEnabled)
                 return;
 
@@ -106,33 +110,89 @@ namespace CreativeMode
             inputs.ToggleCheatFlyState_ServerRPC();
         }
 
+        public static void BeginPhysics(uint id)
+        {
+            _step = true;
+            _stepId = id;
+        }
+
+        public static void EndPhysics()
+        {
+            _step = false;
+        }
+
         public static void Remember(PlayerPhysicsState state)
         {
+            if (!_step)
+                return;
+            Body body = BodyOf(_stepId);
             if (!Blocked(state.Position))
             {
-                _safe = true;
-                _safeSpace = state.SpaceId;
-                _safePos = state.Position;
+                body.HasSafe = true;
+                body.Space = state.SpaceId;
+                body.Pos = state.Position;
             }
         }
 
-        public static void BeginSettle()
+        public static void BeginSettle(uint id)
         {
-            _settle = SettleSteps;
+            BodyOf(id).Steps = SettleSteps;
+        }
+
+        public static uint PushPhysics(uint id)
+        {
+            uint previous = _step ? _stepId : uint.MaxValue;
+            _step = true;
+            _stepId = id;
+            return previous;
+        }
+
+        public static void PopPhysics(uint previous)
+        {
+            if (previous == uint.MaxValue)
+                _step = false;
+            else
+            {
+                _step = true;
+                _stepId = previous;
+            }
+        }
+
+        public static bool TryLocalId(out uint id)
+        {
+            return LocalId(out id);
         }
 
         public static void Settle(ref PlayerPhysicsState state)
         {
-            if (_settle <= 0)
+            if (!_step)
                 return;
-            _settle--;
-            if (!_safe || state.SpaceId != _safeSpace)
+            Body body;
+            if (!Bodies.TryGetValue(_stepId, out body) || body.Steps <= 0)
                 return;
-            Vector3 jump = state.Position - _safePos;
+            int left = body.Steps;
+            body.Steps = left - 1;
+            // Flight keeps its own speed. The first walking step drops it, then gravity can pull.
+            if (left == SettleSteps)
+                state.Velocity = Vector3.zero;
+            if (!body.HasSafe || state.SpaceId != body.Space)
+                return;
+            Vector3 jump = state.Position - body.Pos;
             if (jump.sqrMagnitude <= SettleJump * SettleJump)
                 return;
-            state.Position = _safePos;
+            state.Position = body.Pos;
             state.Velocity = Vector3.zero;
+        }
+
+        public static bool IsSettling(uint id)
+        {
+            Body body;
+            return Bodies.TryGetValue(id, out body) && body.Steps > 0;
+        }
+
+        public static bool IsSettlingCurrent()
+        {
+            return _step && IsSettling(_stepId);
         }
 
         public static bool InsideGeometry(Vector3 position)
@@ -140,22 +200,50 @@ namespace CreativeMode
             return Blocked(position);
         }
 
-        public static bool Settling
+        static Body BodyOf(uint id)
         {
-            get { return _settle > 0; }
+            Body body;
+            if (!Bodies.TryGetValue(id, out body))
+            {
+                body = new Body();
+                Bodies[id] = body;
+            }
+            return body;
+        }
+
+        sealed class Body
+        {
+            public int Steps;
+            public bool HasSafe;
+            public uint Space;
+            public Vector3 Pos;
+            public bool Pending;
+            public bool Device;
+            public bool FromFly;
+            public uint Ship;
+            public ushort Part;
+        }
+
+        static PlayerControlsActivator LocalActivator()
+        {
+            PlayersClientTracker tracker = ServiceLocator.GetService<PlayersClientTracker>();
+            if (tracker == null || tracker.LocalPlayer == null)
+                return null;
+            PlayerNetworkState network = Traverse.Create(tracker.LocalPlayer).Property("NetworkState").GetValue<PlayerNetworkState>();
+            if (network == null)
+                return null;
+            return network.GetComponentInChildren<PlayerControlsActivator>(true);
         }
 
         static void KeepInteractions()
         {
-            PlayerControlsActivator activator = Object.FindAnyObjectByType<PlayerControlsActivator>();
+            PlayerControlsActivator activator = LocalActivator();
             if (activator == null)
                 return;
             PlayerMainState main = Traverse.Create(activator).Field("_state").GetValue<PlayerMainState>();
             if (main == null)
                 return;
-            PlayerState probe = new PlayerState();
-            probe.Type = main.CurrentStateType;
-            if (!probe.IsCheatFlying)
+            if (!IsFly(main.CurrentStateType))
             {
                 RestoreReach();
                 return;
@@ -176,7 +264,7 @@ namespace CreativeMode
                 WidenReach(detectors[i]);
             PlayerCheatFlyControls fly = player.GetComponentInChildren<PlayerCheatFlyControls>(true);
             if (fly != null)
-                fly.currentSpeed = 1f;
+                fly.currentSpeed = SpeedScale();
             PlayerInput input = player.GetComponentInChildren<PlayerInput>(true);
             if (input == null || input.actions == null)
                 return;
@@ -232,7 +320,7 @@ namespace CreativeMode
             if (!down && !_heldKeys)
                 return;
             _heldKeys = down;
-            PlayerControlsActivator activator = Object.FindAnyObjectByType<PlayerControlsActivator>();
+            PlayerControlsActivator activator = LocalActivator();
             if (activator == null)
                 return;
             if (FlyingNow())
@@ -252,7 +340,7 @@ namespace CreativeMode
 
         static void HoldDevice()
         {
-            PlayerControlsActivator activator = Object.FindAnyObjectByType<PlayerControlsActivator>();
+            PlayerControlsActivator activator = LocalActivator();
             if (activator == null)
                 return;
             bool alt = LeftAlt();
@@ -327,6 +415,20 @@ namespace CreativeMode
                 fly.moveInput = Vector3.zero;
         }
 
+        static bool _wasFlying;
+
+        static void NoteLanding()
+        {
+            PlayerStateType type;
+            uint id;
+            if (!StellarDriveMods.Shared.GameKeys.TryGetState(out type) || !LocalId(out id))
+                return;
+            bool flying = IsFly(type);
+            if (_wasFlying && !flying && IsMoveMode(type))
+                BeginSettle(id);
+            _wasFlying = flying;
+        }
+
         static bool LeftAlt()
         {
             Keyboard keyboard = Keyboard.current;
@@ -342,7 +444,11 @@ namespace CreativeMode
         public static void RememberUse(int clientId)
         {
             FlewIntoUse.Add(clientId);
-            _pendingFly = true;
+        }
+
+        public static void MarkPending(uint id)
+        {
+            BodyOf(id).Pending = true;
         }
 
         public static bool WasFlying(int clientId)
@@ -352,31 +458,88 @@ namespace CreativeMode
 
         public static bool ForgetUse(int clientId)
         {
-            if (!FlewIntoUse.Remove(clientId))
+            return FlewIntoUse.Remove(clientId);
+        }
+
+        // F is Leave on the device map and Use on the walking map. Leaving must not count as a new use.
+        public static void MarkLeft(int clientId)
+        {
+            _leftClient = clientId;
+            _leftFrame = Time.frameCount;
+        }
+
+        public static bool JustLeft(int clientId)
+        {
+            return _leftFrame == Time.frameCount && _leftClient == clientId;
+        }
+
+        public static bool OwesFlight(uint playerId)
+        {
+            Body body;
+            return Bodies.TryGetValue(playerId, out body) && body.Device && body.FromFly;
+        }
+
+        public static bool IsLocalConnection(object service, NetworkConnection connection)
+        {
+            if (connection == null)
                 return false;
-            CloseDevice();
+            uint local;
+            if (!LocalId(out local))
+                return false;
+            TrackedPlayerServer player = FlyCanUseParts.FlyingUser(service, connection);
+            return player != null && player.Id == local;
+        }
+
+        public static bool BridgingToDevice(uint id, PlayerStateType next)
+        {
+            Body body;
+            return Bodies.TryGetValue(id, out body) && body.Pending && next == PlayerStateType.Walking;
+        }
+
+        public static void OpenDevice(uint id, bool fromFly, PlayerState state)
+        {
+            Body body = BodyOf(id);
+            body.Device = true;
+            body.FromFly = fromFly || body.Pending;
+            body.Pending = false;
+            body.Ship = state.EntityId;
+            body.Part = state.PartId;
+            MirrorLocal(id, body);
+        }
+
+        public static void CloseDevice(uint id)
+        {
+            Body body = BodyOf(id);
+            body.Device = false;
+            body.FromFly = false;
+            body.Pending = false;
+            uint local;
+            if (LocalId(out local) && local == id)
+            {
+                _deviceOpen = false;
+                _keepFlight = false;
+            }
+        }
+
+        static void MirrorLocal(uint id, Body body)
+        {
+            uint local;
+            if (!LocalId(out local) || local != id)
+                return;
+            _deviceOpen = body.Device;
+            _keepFlight = body.FromFly;
+            _useShip = body.Ship;
+            _usePart = body.Part;
+        }
+
+        static bool LocalId(out uint id)
+        {
+            id = 0;
+            PlayersClientTracker tracker = ServiceLocator.GetService<PlayersClientTracker>();
+            if (tracker == null || tracker.LocalPlayer == null)
+                return false;
+            id = tracker.LocalPlayer.Id;
             return true;
-        }
-
-        public static bool BridgingToDevice(PlayerStateType next)
-        {
-            return _pendingFly && next == PlayerStateType.Walking;
-        }
-
-        public static void OpenDevice(bool fromFly, PlayerState state)
-        {
-            _deviceOpen = true;
-            _keepFlight = fromFly || _pendingFly;
-            _pendingFly = false;
-            _useShip = state.EntityId;
-            _usePart = state.PartId;
-        }
-
-        public static void CloseDevice()
-        {
-            _deviceOpen = false;
-            _keepFlight = false;
-            _pendingFly = false;
         }
 
         public static bool IsDevice(PlayerStateType type)
@@ -406,23 +569,37 @@ namespace CreativeMode
                 || type == PlayerStateType.CheatFlyingHoldingShipPart;
         }
 
-        public static void HoldFlight(PlayerState state)
+        public static void HoldFlight(uint id, PlayerState state)
         {
-            OpenDevice(true, state);
+            OpenDevice(id, true, state);
         }
 
         public static bool KeepsFlight(PlayerState state)
         {
-            if (!_deviceOpen || !_keepFlight || state.EntityId != _useShip || state.PartId != _usePart)
-                return false;
-            if (state.Type == PlayerStateType.Piloting)
-                return LeftAlt();
-            return IsDevice(state.Type);
+            foreach (KeyValuePair<uint, Body> pair in Bodies)
+            {
+                Body body = pair.Value;
+                if (!body.Device || !body.FromFly || body.Ship != state.EntityId || body.Part != state.PartId)
+                    continue;
+                if (state.Type == PlayerStateType.Piloting)
+                {
+                    uint local;
+                    return LeftAlt() && LocalId(out local) && pair.Key == local;
+                }
+                return IsDevice(state.Type);
+            }
+            return false;
         }
 
         public static bool AltDrives(PlayerState state)
         {
-            return _deviceOpen && LeftAlt() && state.EntityId == _useShip && state.PartId == _usePart && IsDevice(state.Type);
+            uint local;
+            if (!LeftAlt() || !LocalId(out local))
+                return false;
+            Body body;
+            if (!Bodies.TryGetValue(local, out body) || !body.Device)
+                return false;
+            return body.Ship == state.EntityId && body.Part == state.PartId && IsDevice(state.Type);
         }
 
         static void FlashSpeed()
@@ -541,7 +718,8 @@ namespace CreativeMode
             Mouse mouse = Mouse.current;
             if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
                 return;
-            PlayerPlugSocketDetector detector = Object.FindAnyObjectByType<PlayerPlugSocketDetector>();
+            PlayerControlsActivator activator = LocalActivator();
+            PlayerPlugSocketDetector detector = activator != null ? activator.GetComponentInChildren<PlayerPlugSocketDetector>(true) : null;
             if (detector == null || !detector.HasSocket || detector.CurrentSocket == null)
                 return;
             if (!ClaimPlug())
@@ -577,7 +755,10 @@ namespace CreativeMode
             if (!_reachWidened || _savedReach < 0f)
                 return;
             _reachWidened = false;
-            PlayerObjectInteractionDetector[] detectors = Object.FindObjectsByType<PlayerObjectInteractionDetector>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            PlayerControlsActivator activator = LocalActivator();
+            if (activator == null)
+                return;
+            PlayerObjectInteractionDetector[] detectors = activator.GetComponentsInChildren<PlayerObjectInteractionDetector>(true);
             for (int i = 0; i < detectors.Length; i++)
             {
                 if (detectors[i] != null)
@@ -612,10 +793,92 @@ namespace CreativeMode
     [HarmonyPatch(typeof(PlayerCheatFlyPhysics), "ProcessPhysicsStep")]
     static class RememberOpenAir
     {
-        static void Postfix(ref PlayerPhysicsStepResult __result)
+        const float EaseSeconds = 0.18f;
+
+        static void Prefix(PlayerPhysicsStepContext context, out bool __smooth, out Vector3 __pos, out Vector3 __vel, out float __dt)
         {
-            if (CreativeSession.IsActive)
-                CreativeFlight.Remember(__result.State);
+            __smooth = CreativeSession.IsActive;
+            __pos = context.State.Position;
+            __vel = context.State.Velocity;
+            __dt = context.DeltaTime;
+        }
+
+        static void Postfix(ref PlayerPhysicsStepResult __result, bool __smooth, Vector3 __pos, Vector3 __vel, float __dt)
+        {
+            if (!__smooth)
+                return;
+            if (__dt > 0.0001f)
+            {
+                Vector3 instant = (__result.State.Position - __pos) / __dt;
+                float rate = instant.magnitude;
+                float carried = __vel.magnitude;
+                if (carried > rate)
+                    rate = carried;
+                if (rate < 4f)
+                    rate = 4f;
+                Vector3 velocity = Vector3.MoveTowards(__vel, instant, rate / EaseSeconds * __dt);
+                PlayerPhysicsState state = __result.State;
+                state.Position = __pos + velocity * __dt;
+                state.Velocity = velocity;
+                __result.State = state;
+            }
+            CreativeFlight.Remember(__result.State);
+        }
+    }
+
+    // A tap of space is the flight toggle. The same press must not also fling the player upward.
+    [HarmonyPatch(typeof(PlayerCheatFlyCapture), "CaptureInput")]
+    static class SendCreativeGear
+    {
+        static void Prefix(PlayerCheatFlyCapture __instance)
+        {
+            if (!CreativeSession.IsActive)
+                return;
+            PlayerCheatFlyControls fly = Traverse.Create(__instance).Field("_flyControls").GetValue<PlayerCheatFlyControls>();
+            if (fly == null)
+                return;
+            fly.currentSpeed = CreativeFlight.SpeedScale();
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.spaceKey.wasPressedThisFrame && fly.moveInput.y > 0f)
+                fly.moveInput.y = 0f;
+        }
+    }
+
+    // Noclip still flies through a ship. Boarding it would parent the player and yank them along.
+    [HarmonyPatch(typeof(PlayerPhysics), "FindShipWherePlayerIsInside")]
+    static class FlyDoesNotBoard
+    {
+        static bool Prefix(PlayerPhysics __instance, ref IShipStateRead __result)
+        {
+            if (!CreativeSession.IsActive)
+                return true;
+            PlayerNetworkStateRead read = Traverse.Create(__instance).Field("_stateRead").GetValue<PlayerNetworkStateRead>();
+            if (read == null || !CreativeFlight.IsFly(read.State.Type))
+                return true;
+            __result = null;
+            return false;
+        }
+    }
+
+    // The server skips the landing shove. The predicting client has to skip the same shove, or the two disagree by more than 2 cm and the player snaps.
+    [HarmonyPatch(typeof(LocalPlayerPhysicsPredictions), "ProcessPhysicsStep")]
+    static class PredictLanding
+    {
+        static void Prefix(out bool __ran, out uint __state)
+        {
+            __ran = false;
+            __state = uint.MaxValue;
+            uint id;
+            if (!CreativeFlight.TryLocalId(out id))
+                return;
+            __ran = true;
+            __state = CreativeFlight.PushPhysics(id);
+        }
+
+        static void Postfix(bool __ran, uint __state)
+        {
+            if (__ran)
+                CreativeFlight.PopPhysics(__state);
         }
     }
 
@@ -627,8 +890,11 @@ namespace CreativeMode
             if (!CreativeSession.IsActive)
                 return;
             PlayerNetworkState state = Traverse.Create(__instance).Field("_networkState").GetValue<PlayerNetworkState>();
-            if (state != null && !state.ServerState.IsCheatFlying)
-                CreativeFlight.BeginSettle();
+            TrackedPlayerServer body = __instance.GetComponent<TrackedPlayerServer>();
+            if (body == null)
+                body = __instance.GetComponentInParent<TrackedPlayerServer>();
+            if (state != null && body != null && !state.ServerState.IsCheatFlying)
+                CreativeFlight.BeginSettle(body.Id);
         }
     }
 
@@ -650,7 +916,7 @@ namespace CreativeMode
     {
         static bool Prefix(ref PlayerPhysicsState state)
         {
-            if (!CreativeSession.IsActive || !CreativeFlight.Settling)
+            if (!CreativeSession.IsActive || !CreativeFlight.IsSettlingCurrent())
                 return true;
             if (!CreativeFlight.InsideGeometry(state.Position))
                 return true;
@@ -664,6 +930,8 @@ namespace CreativeMode
     {
         static void Prefix(TrackedPlayerServer __instance)
         {
+            if (__instance != null)
+                CreativeFlight.BeginPhysics(__instance.Id);
             SetCapsule(__instance, false);
         }
 
@@ -671,6 +939,7 @@ namespace CreativeMode
         {
             bool flying = CreativeSession.IsActive && __instance.State.IsCheatFlying;
             SetCapsule(__instance, !flying);
+            CreativeFlight.EndPhysics();
         }
 
         static void SetCapsule(TrackedPlayerServer player, bool collisions)
@@ -697,11 +966,7 @@ namespace CreativeMode
             if (!CreativeSession.IsActive || __instance == null)
                 return;
             PlayerMainState main = Traverse.Create(__instance).Field("_state").GetValue<PlayerMainState>();
-            if (main == null)
-                return;
-            PlayerState probe = new PlayerState();
-            probe.Type = main.CurrentStateType;
-            if (!probe.IsCheatFlying)
+            if (main == null || !CreativeFlight.IsFly(main.CurrentStateType))
                 return;
             CreativeFlight.EnableInteractions(__instance.gameObject);
         }
@@ -712,7 +977,7 @@ namespace CreativeMode
     {
         static void Postfix(PlayerInputSwitcher __instance, PlayerStateChange change)
         {
-            if (!CreativeSession.IsActive || !change.NewState.IsCheatFlying)
+            if (!CreativeSession.IsActive || !CreativeFlight.IsFly(change.NewState.Type))
                 return;
             CreativeFlight.EnableWalkingActions(__instance);
         }
@@ -729,6 +994,26 @@ namespace CreativeMode
                 return false;
             CreativeFlight.ReleaseStolenHover();
             return true;
+        }
+    }
+
+    // A beacon, constant or transmitter is Writing. The game's leave key treats that as closing a book
+    // and only sets Walking, so the part stays taken and flight drops. Leave it through the ship instead.
+    [HarmonyPatch(typeof(PlayerLeavableObjectControl), "OnLeave")]
+    static class LeaveTextStillFlying
+    {
+        static bool Prefix(PlayerLeavableObjectControl __instance, InputAction.CallbackContext context)
+        {
+            if (!CreativeSession.IsActive || __instance == null || !__instance.isActiveAndEnabled || !context.started)
+                return true;
+            IPlayerStateClientRead state = Traverse.Create(__instance).Field("_playerState").GetValue<IPlayerStateClientRead>();
+            if (state == null || state.ClientState.Type != PlayerStateType.Writing)
+                return true;
+            IShipInteractionNetworkService service = Traverse.Create(__instance).Field("_shipInteractionService").GetValue<IShipInteractionNetworkService>();
+            if (service == null)
+                return true;
+            service.StopInteract();
+            return false;
         }
     }
 
@@ -789,10 +1074,10 @@ namespace CreativeMode
 
         internal static bool LeaveAllowed(object worldObject)
         {
-            if (!CreativeSession.IsActive || !CreativeFlight.Settling)
+            if (!CreativeSession.IsActive)
                 return true;
             TrackedPlayerServer player = worldObject as TrackedPlayerServer;
-            if (player == null || player.State.IsCheatFlying)
+            if (player == null || player.State.IsCheatFlying || !CreativeFlight.IsSettling(player.Id))
                 return true;
             return false;
         }
@@ -812,10 +1097,13 @@ namespace CreativeMode
     {
         static void Prefix(object __instance, NetworkConnection __1)
         {
+            if (__1 != null && CreativeFlight.JustLeft(__1.ClientId))
+                return;
             TrackedPlayerServer player = FlyingUser(__instance, __1);
             if (player == null || player.State.Type != PlayerStateType.CheatFlying)
                 return;
             CreativeFlight.RememberUse(__1.ClientId);
+            CreativeFlight.MarkPending(player.Id);
             player.SetState(new PlayerState { Type = PlayerStateType.Walking });
         }
 
@@ -832,7 +1120,7 @@ namespace CreativeMode
                 player.SetState(new PlayerState { Type = PlayerStateType.CheatFlying });
                 return;
             }
-            CreativeFlight.HoldFlight(player.State);
+            CreativeFlight.HoldFlight(player.Id, player.State);
         }
 
         internal static TrackedPlayerServer FlyingUser(object service, NetworkConnection connection)
@@ -849,14 +1137,49 @@ namespace CreativeMode
     [HarmonyPatch("Managers.Server.Services.ShipInteractionService", "RpcLogic___StopInteract_ServerRPC___328543758")]
     static class FlyAfterPartUse
     {
+        static void Prefix(object __instance, NetworkConnection __0)
+        {
+            NoteLeave(__instance, __0);
+        }
+
         static void Postfix(object __instance, NetworkConnection __0)
         {
-            if (__0 == null || !CreativeFlight.ForgetUse(__0.ClientId))
+            Restore(__instance, __0);
+        }
+
+        internal static void NoteLeave(object service, NetworkConnection connection)
+        {
+            if (!CreativeSession.IsActive || connection == null)
                 return;
-            TrackedPlayerServer player = FlyCanUseParts.FlyingUser(__instance, __0);
-            if (player == null)
+            TrackedPlayerServer player = FlyCanUseParts.FlyingUser(service, connection);
+            bool owes = player != null && CreativeFlight.OwesFlight(player.Id);
+            if (owes || CreativeFlight.WasFlying(connection.ClientId))
+                CreativeFlight.MarkLeft(connection.ClientId);
+        }
+
+        internal static void Restore(object service, NetworkConnection connection)
+        {
+            if (connection == null || !CreativeFlight.JustLeft(connection.ClientId))
+                return;
+            CreativeFlight.ForgetUse(connection.ClientId);
+            TrackedPlayerServer player = FlyCanUseParts.FlyingUser(service, connection);
+            if (player == null || CreativeFlight.IsFly(player.State.Type))
                 return;
             player.SetState(new PlayerState { Type = PlayerStateType.CheatFlying });
+        }
+    }
+
+    [HarmonyPatch("Managers.Server.Services.PlanetsInteractionService", "RpcLogic___StopReadObject_ServerRPC___328543758")]
+    static class FlyAfterReading
+    {
+        static void Prefix(object __instance, NetworkConnection __0)
+        {
+            FlyAfterPartUse.NoteLeave(__instance, __0);
+        }
+
+        static void Postfix(object __instance, NetworkConnection __0)
+        {
+            FlyAfterPartUse.Restore(__instance, __0);
         }
     }
 
@@ -892,9 +1215,9 @@ namespace CreativeMode
             PlayerStateType oldType = __instance.State.Type;
             PlayerStateType next = state.Type;
             if (CreativeFlight.IsDevice(next))
-                CreativeFlight.OpenDevice(CreativeFlight.IsFly(oldType), state);
-            else if (CreativeFlight.IsMoveMode(next) && !CreativeFlight.BridgingToDevice(next))
-                CreativeFlight.CloseDevice();
+                CreativeFlight.OpenDevice(__instance.Id, CreativeFlight.IsFly(oldType), state);
+            else if (CreativeFlight.IsMoveMode(next) && !CreativeFlight.BridgingToDevice(__instance.Id, next))
+                CreativeFlight.CloseDevice(__instance.Id);
         }
     }
 }
