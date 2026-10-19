@@ -13,7 +13,7 @@ Pick Creative when you create a new world and you get:
 - Ctrl+Z undoes your own last placement, removal or cable. Ctrl+Y restores it. Each player has a separate history
 - Refill wood thrusters, generators and distillers, or give them infinite fuel
 
-Flight, double-tap Space:
+Flight, double-tap Space or press F1:
 - The mode you are in stays, walking or flying
 - Speed eases in when you move and eases out when you let go. Flying through a ship does not drag you with it
 - Shift+scroll sets speed from ¼× to 128× walking speed. A short label shows the step

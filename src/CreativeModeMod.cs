@@ -2,7 +2,7 @@ using MelonLoader;
 using UI.Status;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.6.3", "VILIK")]
+[assembly: MelonInfo(typeof(CreativeMode.CreativeModeMod), "Creative mode", "1.6.4", "VILIK")]
 [assembly: MelonGame("CuriousOwlGames", "StellarDrive")]
 
 namespace CreativeMode

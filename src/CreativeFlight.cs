@@ -86,53 +86,33 @@ namespace CreativeMode
             Keyboard keyboard = Keyboard.current;
             UseLookedAt(keyboard);
             PlugSnappedCable();
-            TrackSpace(keyboard);
-            TrackFlyKey(keyboard);
         }
 
-        // One physical press is one tap. Jump also sends performed on the next frame, and that was
-        // counted as the second tap, so a double press turned flight on and straight back off.
-        public static void NoteJump(InputAction.CallbackContext context)
+        // jumpInput stays above zero for the whole press. The next press is a new rising edge.
+        public static void ObserveJump(bool held)
         {
-            if (context.canceled)
+            if (held)
             {
-                _spaceHeld = false;
+                if (_spaceHeld)
+                    return;
+                _spaceHeld = true;
+                RegisterTap();
                 return;
             }
-            if (!context.started)
-                return;
-            if (_spaceHeld)
-                return;
-            _spaceHeld = true;
-            RegisterTap();
+            _spaceHeld = false;
         }
 
-        static void TrackSpace(Keyboard keyboard)
+        public static void ObserveFlyKey(bool held)
         {
-            bool down = keyboard != null && keyboard.spaceKey.isPressed;
-            if (!down)
+            if (held)
             {
-                _spaceHeld = false;
+                if (_f1Held)
+                    return;
+                _f1Held = true;
+                ToggleFromKey();
                 return;
             }
-            if (_spaceHeld)
-                return;
-            _spaceHeld = true;
-            RegisterTap();
-        }
-
-        static void TrackFlyKey(Keyboard keyboard)
-        {
-            bool down = keyboard != null && keyboard.f1Key.isPressed;
-            if (!down)
-            {
-                _f1Held = false;
-                return;
-            }
-            if (_f1Held)
-                return;
-            _f1Held = true;
-            ToggleFromKey();
+            _f1Held = false;
         }
 
         public static void ToggleFromKey()
@@ -170,18 +150,34 @@ namespace CreativeMode
             if (_toggleFrame == Time.frameCount)
                 return;
             _toggleFrame = Time.frameCount;
-            PlayerControlsActivator activator = LocalActivator();
-            if (activator == null)
-                return;
-            // Cheat controls are not in the walking script list, so they are often disabled while standing.
-            PlayerCheatControls controls = activator.GetComponentInChildren<PlayerCheatControls>(true);
-            PlayerNetworkInputs inputs = controls != null ? Traverse.Create(controls).Field("_inputs").GetValue<PlayerNetworkInputs>() : null;
-            if (inputs == null)
-                inputs = activator.GetComponentInChildren<PlayerNetworkInputs>(true);
+            // The control scripts are instantiated beside the network object, not under it.
+            PlayerNetworkInputs inputs = FlightInputs();
             if (inputs == null)
                 return;
+            // Single player and hosting are the server (offline Yak, or Steam host). Joining only
+            // has a client, so the toggle has to travel as an RPC. Calling the RPC on the server
+            // copy is dropped when that object is not the initialized owner.
+            if (FishNet.InstanceFinder.IsServerStarted)
+                inputs.RpcLogic___ToggleCheatFlyState_ServerRPC___2166136261();
+            else
+                inputs.ToggleCheatFlyState_ServerRPC();
+        }
 
-            inputs.ToggleCheatFlyState_ServerRPC();
+        static PlayerNetworkInputs FlightInputs()
+        {
+            PlayerCheatControls[] controls = UnityEngine.Object.FindObjectsByType<PlayerCheatControls>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            PlayerNetworkInputs fallback = null;
+            for (int i = 0; i < controls.Length; i++)
+            {
+                PlayerNetworkInputs inputs = Traverse.Create(controls[i]).Field("_inputs").GetValue<PlayerNetworkInputs>();
+                if (inputs == null)
+                    continue;
+                if (inputs.IsOwner)
+                    return inputs;
+                if (fallback == null)
+                    fallback = inputs;
+            }
+            return fallback;
         }
 
         public static void BeginPhysics(uint id)
@@ -1147,18 +1143,22 @@ namespace CreativeMode
     [HarmonyPatch(typeof(PlayerWalkingControls), "OnJump")]
     static class WalkJumpTogglesFlight
     {
-        static void Postfix(InputAction.CallbackContext context)
+        static void Postfix(PlayerWalkingControls __instance)
         {
-            CreativeFlight.NoteJump(context);
+            if (__instance == null || !__instance.isActiveAndEnabled)
+                return;
+            CreativeFlight.ObserveJump(__instance.jumpInput > 0.5f);
         }
     }
 
     [HarmonyPatch(typeof(PlayerCheatFlyControls), "OnJump")]
     static class FlyJumpTogglesFlight
     {
-        static void Postfix(InputAction.CallbackContext context)
+        static void Postfix(PlayerCheatFlyControls __instance)
         {
-            CreativeFlight.NoteJump(context);
+            if (__instance == null || !__instance.isActiveAndEnabled)
+                return;
+            CreativeFlight.ObserveJump(__instance.moveInput.y > 0.5f);
         }
     }
 
@@ -1169,8 +1169,7 @@ namespace CreativeMode
         {
             if (!CreativeSession.IsActive)
                 return true;
-            if (context.performed)
-                CreativeFlight.ToggleFromKey();
+            CreativeFlight.ObserveFlyKey(!context.canceled && (context.started || context.performed));
             return false;
         }
     }
