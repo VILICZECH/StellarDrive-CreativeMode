@@ -883,7 +883,7 @@ namespace CreativeMode
         }
     }
 
-    [HarmonyPatch(typeof(EthanolDistillersUpdater), "GuessPowerConsumptionAndProductionRate")]
+    [HarmonyPatch(typeof(EthanolDistillersUpdater), "WriteFluidProductionTarget")]
     static class InfiniteDistillerGuess
     {
         static readonly Dictionary<ulong, InventorySlot[]> Slots = new Dictionary<ulong, InventorySlot[]>();
@@ -901,7 +901,7 @@ namespace CreativeMode
             Restore(ShipOf(__instance), Slots, Partial);
         }
 
-        static IShipStateWrite ShipOf(EthanolDistillersUpdater updater)
+        internal static IShipStateWrite ShipOf(EthanolDistillersUpdater updater)
         {
             return Traverse.Create(updater).Field("_ship").GetValue<IShipStateWrite>();
         }
@@ -951,6 +951,25 @@ namespace CreativeMode
         }
     }
 
+    [HarmonyPatch(typeof(EthanolDistillersUpdater), "WritePowerRequest")]
+    static class InfiniteDistillerPowerRequest
+    {
+        static readonly Dictionary<ulong, InventorySlot[]> Slots = new Dictionary<ulong, InventorySlot[]>();
+        static readonly Dictionary<ulong, float> Partial = new Dictionary<ulong, float>();
+
+        static void Prefix(EthanolDistillersUpdater __instance)
+        {
+            Slots.Clear();
+            Partial.Clear();
+            InfiniteDistillerGuess.Pretend(InfiniteDistillerGuess.ShipOf(__instance), Slots, Partial);
+        }
+
+        static void Postfix(EthanolDistillersUpdater __instance)
+        {
+            InfiniteDistillerGuess.Restore(InfiniteDistillerGuess.ShipOf(__instance), Slots, Partial);
+        }
+    }
+
     [HarmonyPatch(typeof(EthanolDistillersUpdater), "Update")]
     static class InfiniteDistiller
     {
@@ -961,17 +980,12 @@ namespace CreativeMode
         {
             Slots.Clear();
             Partial.Clear();
-            InfiniteDistillerGuess.Pretend(ShipOf(__instance), Slots, Partial);
+            InfiniteDistillerGuess.Pretend(InfiniteDistillerGuess.ShipOf(__instance), Slots, Partial);
         }
 
         static void Postfix(EthanolDistillersUpdater __instance)
         {
-            InfiniteDistillerGuess.Restore(ShipOf(__instance), Slots, Partial);
-        }
-
-        static IShipStateWrite ShipOf(EthanolDistillersUpdater updater)
-        {
-            return Traverse.Create(updater).Field("_ship").GetValue<IShipStateWrite>();
+            InfiniteDistillerGuess.Restore(InfiniteDistillerGuess.ShipOf(__instance), Slots, Partial);
         }
     }
 }

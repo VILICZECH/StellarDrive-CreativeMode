@@ -491,7 +491,8 @@ namespace CreativeMode
             bool up = keyboard.spaceKey.isPressed;
             bool down = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
             walk.jumpInput = up ? 1f : 0f;
-            walk.crouchInput = down && !up ? 1f : 0f;
+            walk.moveDownInput = down && !up ? 1f : 0f;
+            walk.crouchInput = down && !up;
             PlayerCheatFlyControls fly = root.GetComponentInChildren<PlayerCheatFlyControls>(true);
             if (fly == null)
                 return;
@@ -509,7 +510,8 @@ namespace CreativeMode
             {
                 walk.moveInput = Vector2.zero;
                 walk.jumpInput = 0f;
-                walk.crouchInput = 0f;
+                walk.moveDownInput = 0f;
+                walk.crouchInput = false;
             }
             PlayerCheatFlyControls fly = root.GetComponentInChildren<PlayerCheatFlyControls>(true);
             if (fly != null)
